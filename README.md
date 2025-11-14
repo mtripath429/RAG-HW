@@ -1,19 +1,18 @@
-# 🎈 Blank app template
+# Team Knowledge Base RAG (Streamlit + OpenAI + Chroma)
 
-A simple Streamlit app template for you to modify!
+This app lets you ask questions over a local folder of documents (`kb_docs/`)
+using a vector-based RAG pipeline (OpenAI embeddings + Chroma + Streamlit).
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+## How it works
 
-### How to run it on your own machine
+- Put documents in `kb_docs/` (PDF, DOCX, PPTX, CSV, TXT, MD)
+- Click "Rebuild Index" in the Streamlit app → creates embeddings
+- Ask questions → model retrieves relevant chunks + answers based on them
+- Optional: enable self-critique mode
 
-1. Install the requirements
+## Running Locally
 
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+```bash
+pip install -r requirements.txt
+export OPENAI_API_KEY="sk-..."
+streamlit run streamlit_app.py

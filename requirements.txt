@@ -1,1 +1,7 @@
 streamlit
+chromadb
+openai
+pypdf
+python-docx
+python-pptx
+pandas
