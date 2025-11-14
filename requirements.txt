@@ -1,6 +1,8 @@
 streamlit
-qdrant-client
-openai
+faiss-cpu
+langchain
+langchain-community
+langchain-openai
 pypdf
 python-docx
 python-pptx
