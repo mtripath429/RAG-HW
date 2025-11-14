@@ -1,5 +1,5 @@
 streamlit
-chromadb
+qdrant-client
 openai
 pypdf
 python-docx

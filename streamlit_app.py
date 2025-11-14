@@ -1,30 +1,25 @@
 # streamlit_app.py
+import os
 import textwrap
 
 import streamlit as st
-import chromadb
-from chromadb.config import Settings
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams
 from openai import OpenAI
 
 from ingest import ingest_local_folder
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-CHAT_MODEL = "gpt-4.1-mini"
-PERSIST_DIR = "chroma_db"
+CHAT_MODEL = "gpt-4o-mini"
+QDRANT_PATH = "qdrant_db"
 COLLECTION_NAME = "team_kb"
 
 client = OpenAI()
 
 
 @st.cache_resource
-def get_chroma_collection():
-    db = chromadb.Client(
-        Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory=PERSIST_DIR,
-        )
-    )
-    return db.get_collection(COLLECTION_NAME)
+def get_qdrant_client():
+    return QdrantClient(path=QDRANT_PATH)
 
 
 def embed_query(query: str):
@@ -67,21 +62,26 @@ Rules:
 
 
 def answer_query(query: str, k: int = 5):
-    collection = get_chroma_collection()
+    qdrant = get_qdrant_client()
     q_emb = embed_query(query)
-    results = collection.query(
-        query_embeddings=[q_emb],
-        n_results=k,
-    )
+    
+    try:
+        results = qdrant.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=q_emb,
+            limit=k,
+        )
+    except Exception as e:
+        raise Exception(f"Error searching Qdrant: {str(e)}")
 
     chunks = []
-    for i in range(len(results["ids"][0])):
+    for result in results:
         chunks.append(
             {
-                "id": results["ids"][0][i],
-                "document": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i],
-                "distance": results["distances"][0][i],
+                "id": result.id,
+                "document": result.payload.get("text", ""),
+                "metadata": result.payload.get("metadata", {}),
+                "distance": result.score,
             }
         )
 
@@ -136,6 +136,11 @@ Critique (3-5 bullet points):
 
 def main():
     st.title("Team Knowledge Base Q&A (Local Folder RAG)")
+    
+    # Check for API key
+    if not os.getenv("OPENAI_API_KEY"):
+        st.error("❌ OPENAI_API_KEY environment variable not set. Please set it and restart.")
+        return
 
     st.sidebar.header("Settings")
     k = st.sidebar.slider("Top-k retrieved chunks", 3, 15, 5)
@@ -143,9 +148,16 @@ def main():
     enable_critique = st.sidebar.checkbox("Show model self-critique", value=False)
 
     if st.sidebar.button("Rebuild Index (kb_docs/)"):
+        if not os.path.exists("kb_docs"):
+            st.sidebar.error("kb_docs folder not found. Please create it and add documents.")
+            return
         with st.spinner("Indexing and embedding documents..."):
-            ingest_local_folder()
-        st.sidebar.success("Index rebuilt. Ask a new question.")
+            try:
+                ingest_local_folder()
+                st.sidebar.success("Index rebuilt. Ask a new question.")
+            except Exception as e:
+                st.sidebar.error(f"Error building index: {str(e)}")
+                return
 
     query = st.text_area("Ask a question about your documents:")
 

@@ -2,8 +2,8 @@
 import os
 from typing import List, Dict
 
-import chromadb
-from chromadb.config import Settings
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
 from openai import OpenAI
 
 from parsers import parse_file
@@ -11,7 +11,7 @@ from parsers import parse_file
 client = OpenAI()
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-PERSIST_DIR = "chroma_db"
+QDRANT_PATH = "qdrant_db"
 COLLECTION_NAME = "team_kb"
 DOCS_ROOT = "kb_docs"
 
@@ -28,22 +28,33 @@ def chunk_text(text: str, max_tokens: int = 500, overlap: int = 100) -> List[str
     return chunks
 
 
-def build_chroma_client():
-    return chromadb.Client(
-        Settings(
-            chroma_db_impl="duckdb+parquet",
-            persist_directory=PERSIST_DIR,
-        )
-    )
+def build_qdrant_client():
+    return QdrantClient(path=QDRANT_PATH)
 
 
 def ingest_local_folder(
     docs_root: str = DOCS_ROOT,
-    persist_directory: str = PERSIST_DIR,
     collection_name: str = COLLECTION_NAME,
 ):
-    db = build_chroma_client()
-    collection = db.get_or_create_collection(name=collection_name)
+    # Validate docs folder exists
+    if not os.path.exists(docs_root):
+        raise FileNotFoundError(f"Documents folder '{docs_root}' not found.")
+    
+    qdrant = build_qdrant_client()
+    
+    # Create or recreate collection
+    try:
+        qdrant.delete_collection(collection_name)
+    except:
+        pass  # Collection doesn't exist yet
+    
+    qdrant.create_collection(
+        collection_name=collection_name,
+        vectors_config=VectorParams(
+            size=1536,  # Size for OpenAI's text-embedding-3-small
+            distance=Distance.COSINE,
+        ),
+    )
 
     doc_ids = []
     texts = []
@@ -94,15 +105,25 @@ def ingest_local_folder(
         )
         embeddings.extend([d.embedding for d in resp.data])
 
-    collection.delete(where={})
-    collection.add(
-        ids=doc_ids,
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=metadatas,
+    # Create points for Qdrant
+    points = []
+    for i, (doc_id, text, embedding, metadata) in enumerate(
+        zip(doc_ids, texts, embeddings, metadatas)
+    ):
+        points.append(
+            PointStruct(
+                id=i,
+                vector=embedding,
+                payload={"text": text, "metadata": metadata, "doc_id": doc_id},
+            )
+        )
+
+    # Upsert points to Qdrant
+    qdrant.upsert(
+        collection_name=collection_name,
+        points=points,
     )
 
-    db.persist()
     print("Ingestion complete.")
 
 
