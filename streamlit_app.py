@@ -17,7 +17,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, OpenAI
 from langchain_core.prompts import PromptTemplate
-from langchain_community.chains import RetrievalQA
+from langchain_core.output_parsers import StrOutputParser
 
 
 # ------------------------------------------------------------------------------
@@ -122,16 +122,25 @@ Helpful Answer:"""
         input_variables=["context", "question"],
     )
 
-    # Use a simpler chain approach for modern langchain
-    chain = RetrievalQA.from_chain_type(
-        llm=OpenAI(temperature=0.2),
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(),
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": PROMPT},
+    # Create a simple QA chain using LCEL (LangChain Expression Language)
+    llm = OpenAI(temperature=0.2)
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    
+    # Define the chain using LCEL syntax
+    def format_docs(docs):
+        return "\n\n".join(d.page_content for d in docs)
+    
+    chain = (
+        {
+            "context": retriever | format_docs,
+            "question": lambda x: x["question"] if isinstance(x, dict) else x,
+        }
+        | PROMPT
+        | llm
+        | StrOutputParser()
     )
 
-    return vectorstore, chain
+    return vectorstore, retriever
 
 
 def get_answer(query: str, k: int = 2):
@@ -139,15 +148,37 @@ def get_answer(query: str, k: int = 2):
     Run similarity search on FAISS, then QA chain over top-k docs.
     Returns: (answer_text, reference_text)
     """
-    vectorstore, chain = load_vectorstore_and_chain()
+    vectorstore, retriever = load_vectorstore_and_chain()
+    
+    # Get relevant documents
+    relevant_docs = retriever.get_relevant_documents(query)
+    
+    # Create and run the QA chain
+    prompt_template = """Use the following pieces of context to answer the question at the end. 
+If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
-    # Run QA chain with retrieval
-    results = chain({"query": query})
+Context:
+{context}
 
-    # Extract answer and sources
-    answer_text = results.get("result", "No answer generated")
-    source_docs = results.get("source_documents", [])
-    reference_text = "\n\n".join(d.page_content for d in source_docs)
+Question: {question}
+
+Helpful Answer:"""
+
+    PROMPT = PromptTemplate(
+        template=prompt_template,
+        input_variables=["context", "question"],
+    )
+    
+    llm = OpenAI(temperature=0.2)
+    
+    # Format documents
+    context_text = "\n\n".join(d.page_content for d in relevant_docs)
+    
+    # Create prompt and get answer
+    prompt = PROMPT.format(context=context_text, question=query)
+    answer_text = llm(prompt)
+
+    reference_text = context_text
 
     return answer_text, reference_text
 
