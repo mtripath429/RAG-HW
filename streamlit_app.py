@@ -115,7 +115,7 @@ Answer:"""
     # Get answer
     llm = OpenAI(temperature=0.3)
     formatted_prompt = prompt.format(context=context, question=query)
-    answer = llm(formatted_prompt)
+    answer = llm.invoke(formatted_prompt)
     
     return answer, context
 
