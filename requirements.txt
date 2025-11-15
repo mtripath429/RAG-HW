@@ -6,5 +6,3 @@ langchain-openai
 langchain-text-splitters
 pypdf
 python-docx
-openpyxl
-unstructured

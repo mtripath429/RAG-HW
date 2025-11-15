@@ -6,7 +6,7 @@ import os
 import streamlit as st
 from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader, UnstructuredExcelLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, OpenAI
@@ -20,7 +20,7 @@ DOCS_PATH = "docs"
 
 
 def load_documents():
-    """Load documents from docs folder - PDF, TXT, DOCX, and XLSX files."""
+    """Load documents from docs folder - PDF, TXT, and DOCX files."""
     documents = []
     docs_dir = Path(DOCS_PATH)
     
@@ -66,19 +66,6 @@ def load_documents():
                     st.warning(f"Failed to load {docx_file.name}: {str(e)}")
     except Exception as e:
         st.warning(f"Error loading DOCX files: {str(e)}")
-    
-    # Load XLSX files
-    try:
-        xlsx_files = list(docs_dir.glob("**/*.xlsx"))
-        if xlsx_files:
-            for xlsx_file in xlsx_files:
-                try:
-                    loader = UnstructuredExcelLoader(str(xlsx_file))
-                    documents.extend(loader.load())
-                except Exception as e:
-                    st.warning(f"Failed to load {xlsx_file.name}: {str(e)}")
-    except Exception as e:
-        st.warning(f"Error loading XLSX files: {str(e)}")
     
     return documents
 
@@ -152,7 +139,7 @@ def main():
     
     st.markdown("""
     This app lets you ask questions about documents in the `docs/` folder.
-    - Supported formats: PDF, TXT
+    - Supported formats: PDF, TXT, DOCX
     - Uses FAISS for semantic search
     - Powered by OpenAI
     """)
