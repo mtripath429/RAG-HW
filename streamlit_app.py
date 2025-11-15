@@ -9,18 +9,15 @@ from langchain_community.document_loaders import (
     DirectoryLoader,
     PyPDFLoader,
     TextLoader,
+    Docx2txtLoader,
+    UnstructuredPowerPointLoader,
+    CSVLoader,
 )
-from langchain_community.document_loaders.word_document import Docx2txtLoader
-from langchain_community.document_loaders import UnstructuredPowerPointLoader
-from langchain_community.document_loaders import CSVLoader
-
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, OpenAI
-
-from langchain.prompts import PromptTemplate
-from langchain.chains.question_answering import load_qa_chain
-from langchain.output_parsers import RegexParser
+from langchain_core.prompts import PromptTemplate
+from langchain_community.chains import RetrievalQA
 
 
 # ------------------------------------------------------------------------------
@@ -109,42 +106,29 @@ def load_vectorstore_and_chain():
     # --- Build FAISS index ---
     vectorstore = FAISS.from_documents(texts, OpenAIEmbeddings())
 
-    # --- Prompt & chain (same style as your example) ---
-    prompt_template = """
-Use the following pieces of context to answer the question at the end. Make sure the answer leverages the context rather than
-just your general knowledge. If you don't know the answer, just say that you don't know, don't try to make up an answer.
-
-This should be in the following format:
-
-Question: [question here]
-Helpful Answer: [answer here]
-Score: [score between 0 and 100]
-
-Begin!
+    # --- Simple QA chain using LangChain's standard approach ---
+    prompt_template = """Use the following pieces of context to answer the question at the end. 
+If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
 Context:
----------
 {context}
----------
-Question: {question}
-Helpful Answer:"""
 
-    output_parser = RegexParser(
-        regex=r"(.*?)\nScore: (.*)",
-        output_keys=["answer", "score"],
-    )
+Question: {question}
+
+Helpful Answer:"""
 
     PROMPT = PromptTemplate(
         template=prompt_template,
         input_variables=["context", "question"],
-        output_parser=output_parser,
     )
 
-    chain = load_qa_chain(
-        OpenAI(temperature=0),
-        chain_type="map_rerank",
-        return_intermediate_steps=True,
-        prompt=PROMPT,
+    # Use a simpler chain approach for modern langchain
+    chain = RetrievalQA.from_chain_type(
+        llm=OpenAI(temperature=0.2),
+        chain_type="stuff",
+        retriever=vectorstore.as_retriever(),
+        return_source_documents=True,
+        chain_type_kwargs={"prompt": PROMPT},
     )
 
     return vectorstore, chain
@@ -153,28 +137,19 @@ Helpful Answer:"""
 def get_answer(query: str, k: int = 2):
     """
     Run similarity search on FAISS, then QA chain over top-k docs.
-    Returns: (answer_text, reference_text, score)
+    Returns: (answer_text, reference_text)
     """
     vectorstore, chain = load_vectorstore_and_chain()
 
-    # similarity_search_with_score -> list of (Document, score)
-    relevant_chunks = vectorstore.similarity_search_with_score(query, k=k)
-    chunk_docs = [doc for doc, score in relevant_chunks]
+    # Run QA chain with retrieval
+    results = chain({"query": query})
 
-    # Run QA chain (map_rerank) as in your example
-    results = chain(
-        {"input_documents": chunk_docs, "question": query},
-        return_only_outputs=False,
-    )
+    # Extract answer and sources
+    answer_text = results.get("result", "No answer generated")
+    source_docs = results.get("source_documents", [])
+    reference_text = "\n\n".join(d.page_content for d in source_docs)
 
-    # results["output_text"] contains the formatted answer + Score
-    output_text = results["output_text"]
-
-    # You can parse answer/score from output_text using the RegexParser logic.
-    # But for simplicity, just return the whole thing the model produced.
-    reference_text = "\n\n".join(d.page_content for d in chunk_docs)
-
-    return output_text, reference_text
+    return answer_text, reference_text
 
 
 # ------------------------------------------------------------------------------
