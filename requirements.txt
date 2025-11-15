@@ -3,7 +3,9 @@ faiss-cpu
 langchain
 langchain-community
 langchain-openai
+langchain-text-splitters
 pypdf
 python-docx
 python-pptx
 pandas
+docx2txt
