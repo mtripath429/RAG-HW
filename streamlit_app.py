@@ -1,230 +1,160 @@
-# streamlit_app.py
+"""
+RAG Streamlit App - Document Q&A with FAISS and LangChain
+"""
 
 import os
-import textwrap
-
 import streamlit as st
+from pathlib import Path
 
-from langchain_community.document_loaders import (
-    DirectoryLoader,
-    PyPDFLoader,
-    TextLoader,
-    Docx2txtLoader,
-    UnstructuredPowerPointLoader,
-    CSVLoader,
-)
+from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings, OpenAI
 from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
-
-# ------------------------------------------------------------------------------
-# OpenAI key from Streamlit secrets
-# ------------------------------------------------------------------------------
-
-# Streamlit Cloud: set this in "Secrets" as OPENAI_API_KEY = "sk-..."
+# Set OpenAI API key from Streamlit secrets
 if "OPENAI_API_KEY" in st.secrets:
     os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
-
 
 DOCS_PATH = "docs"
 
 
-# ------------------------------------------------------------------------------
-# Load and index documents (cached)
-# ------------------------------------------------------------------------------
+def load_documents():
+    """Load documents from docs folder - only PDF and TXT files."""
+    documents = []
+    docs_dir = Path(DOCS_PATH)
+    
+    if not docs_dir.exists():
+        st.warning(f"Docs directory '{DOCS_PATH}' not found!")
+        return documents
+    
+    # Load PDFs
+    try:
+        pdf_files = list(docs_dir.glob("**/*.pdf"))
+        if pdf_files:
+            for pdf_file in pdf_files:
+                try:
+                    loader = PyPDFLoader(str(pdf_file))
+                    documents.extend(loader.load())
+                except Exception as e:
+                    st.warning(f"Failed to load {pdf_file.name}: {str(e)}")
+    except Exception as e:
+        st.warning(f"Error loading PDFs: {str(e)}")
+    
+    # Load TXT files
+    try:
+        txt_files = list(docs_dir.glob("**/*.txt"))
+        if txt_files:
+            for txt_file in txt_files:
+                try:
+                    loader = TextLoader(str(txt_file))
+                    documents.extend(loader.load())
+                except Exception as e:
+                    st.warning(f"Failed to load {txt_file.name}: {str(e)}")
+    except Exception as e:
+        st.warning(f"Error loading TXT files: {str(e)}")
+    
+    return documents
+
 
 @st.cache_resource
-def load_vectorstore_and_chain():
-    # --- Load documents of multiple types from docs/ ---
-    documents = []
-
-    # PDFs
-    pdf_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.pdf",
-        loader_cls=PyPDFLoader,
-    )
-    documents.extend(pdf_loader.load())
-
-    # Plain text
-    txt_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.txt",
-        loader_cls=TextLoader,
-    )
-    documents.extend(txt_loader.load())
-
-    # Markdown
-    md_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.md",
-        loader_cls=TextLoader,
-    )
-    documents.extend(md_loader.load())
-
-    # DOCX
-    docx_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.docx",
-        loader_cls=Docx2txtLoader,
-    )
-    documents.extend(docx_loader.load())
-
-    # PPTX
-    pptx_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.pptx",
-        loader_cls=UnstructuredPowerPointLoader,
-    )
-    documents.extend(pptx_loader.load())
-
-    # CSV
-    csv_loader = DirectoryLoader(
-        DOCS_PATH,
-        glob="**/*.csv",
-        loader_cls=CSVLoader,
-    )
-    documents.extend(csv_loader.load())
-
-    print(f"Loaded {len(documents)} documents from {DOCS_PATH}")
-
-    # --- Chunking ---
-    chunk_size_value = 1000
-    chunk_overlap = 100
-
+def load_vectorstore():
+    """Load documents and create FAISS vectorstore."""
+    documents = load_documents()
+    
+    if not documents:
+        st.error("No documents loaded. Please add PDF or TXT files to the docs/ folder.")
+        st.stop()
+    
+    st.info(f"Loaded {len(documents)} documents")
+    
+    # Split documents
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size_value,
-        chunk_overlap=chunk_overlap,
-        length_function=len,
+        chunk_size=1000,
+        chunk_overlap=200,
     )
-
-    texts = text_splitter.split_documents(documents)
-
-    # --- Build FAISS index ---
-    vectorstore = FAISS.from_documents(texts, OpenAIEmbeddings())
-
-    # --- Simple QA chain using LangChain's standard approach ---
-    prompt_template = """Use the following pieces of context to answer the question at the end. 
-If you don't know the answer, just say that you don't know, don't try to make up an answer.
-
-Context:
-{context}
-
-Question: {question}
-
-Helpful Answer:"""
-
-    PROMPT = PromptTemplate(
-        template=prompt_template,
-        input_variables=["context", "question"],
-    )
-
-    # Create a simple QA chain using LCEL (LangChain Expression Language)
-    llm = OpenAI(temperature=0.2)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    chunks = text_splitter.split_documents(documents)
+    st.info(f"Split into {len(chunks)} chunks")
     
-    # Define the chain using LCEL syntax
-    def format_docs(docs):
-        return "\n\n".join(d.page_content for d in docs)
+    # Create FAISS vectorstore
+    embeddings = OpenAIEmbeddings()
+    vectorstore = FAISS.from_documents(chunks, embeddings)
     
-    chain = (
-        {
-            "context": retriever | format_docs,
-            "question": lambda x: x["question"] if isinstance(x, dict) else x,
-        }
-        | PROMPT
-        | llm
-        | StrOutputParser()
-    )
-
-    return vectorstore, retriever
+    return vectorstore
 
 
-def get_answer(query: str, k: int = 2):
-    """
-    Run similarity search on FAISS, then QA chain over top-k docs.
-    Returns: (answer_text, reference_text)
-    """
-    vectorstore, retriever = load_vectorstore_and_chain()
+def get_answer(query: str):
+    """Get answer from RAG pipeline."""
+    vectorstore = load_vectorstore()
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     
-    # Get relevant documents
+    # Get relevant docs
     relevant_docs = retriever.get_relevant_documents(query)
     
-    # Create and run the QA chain
-    prompt_template = """Use the following pieces of context to answer the question at the end. 
-If you don't know the answer, just say that you don't know, don't try to make up an answer.
+    if not relevant_docs:
+        return "No relevant documents found.", ""
+    
+    # Format context
+    context = "\n\n".join([doc.page_content for doc in relevant_docs])
+    
+    # Create prompt
+    prompt_template = """Answer the question based on the following context. If you don't know the answer, say so.
 
 Context:
 {context}
 
 Question: {question}
 
-Helpful Answer:"""
-
-    PROMPT = PromptTemplate(
+Answer:"""
+    
+    prompt = PromptTemplate(
         template=prompt_template,
         input_variables=["context", "question"],
     )
     
-    llm = OpenAI(temperature=0.2)
+    # Get answer
+    llm = OpenAI(temperature=0.3)
+    formatted_prompt = prompt.format(context=context, question=query)
+    answer = llm(formatted_prompt)
     
-    # Format documents
-    context_text = "\n\n".join(d.page_content for d in relevant_docs)
-    
-    # Create prompt and get answer
-    prompt = PROMPT.format(context=context_text, question=query)
-    answer_text = llm(prompt)
+    return answer, context
 
-    reference_text = context_text
-
-    return answer_text, reference_text
-
-
-# ------------------------------------------------------------------------------
-# Streamlit UI
-# ------------------------------------------------------------------------------
 
 def main():
-    st.title("Document Q&A (FAISS + LangChain + OpenAI)")
-
-    st.markdown(
-        "This app loads documents from the `docs/` folder (PDF, DOCX, PPTX, TXT, MD, CSV), "
-        "indexes them with FAISS, and answers questions using a RAG-style pipeline."
-    )
-
-    st.sidebar.header("Settings")
-    k = st.sidebar.slider("Top-k chunks to use", min_value=1, max_value=10, value=2, step=1)
-    show_refs = st.sidebar.checkbox("Show reference text", value=True)
-
-    # Trigger loading index (so user sees spinner)
-    with st.spinner("Loading documents and building index (only runs once)..."):
-        _ = load_vectorstore_and_chain()
-
-    query = st.text_area("Ask a question about your documents:")
-
-    if st.button("Get Answer"):
-        if not query.strip():
-            st.warning("Please enter a question.")
-            return
-
-        with st.spinner("Searching and generating answer..."):
-            answer_text, reference_text = get_answer(query, k=k)
-
-        st.subheader("Answer")
-        st.write(answer_text)
-
-        if show_refs:
-            st.subheader("Reference Chunks (text used by the model)")
-            st.text(
-                textwrap.shorten(
-                    reference_text,
-                    width=4000,
-                    placeholder="\n\n[... truncated ...]",
-                )
-            )
+    st.set_page_config(page_title="RAG Q&A", layout="wide")
+    st.title("Document Q&A with RAG")
+    
+    st.markdown("""
+    This app lets you ask questions about documents in the `docs/` folder.
+    - Supported formats: PDF, TXT
+    - Uses FAISS for semantic search
+    - Powered by OpenAI
+    """)
+    
+    # Load vectorstore
+    try:
+        with st.spinner("Loading documents..."):
+            vectorstore = load_vectorstore()
+        st.success("Documents loaded!")
+    except Exception as e:
+        st.error(f"Error loading documents: {str(e)}")
+        st.stop()
+    
+    # Query input
+    query = st.text_input("Ask a question about your documents:")
+    
+    if query:
+        try:
+            with st.spinner("Searching and generating answer..."):
+                answer, context = get_answer(query)
+            
+            st.subheader("Answer")
+            st.write(answer)
+            
+            with st.expander("View context"):
+                st.text(context[:2000] + "..." if len(context) > 2000 else context)
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 
 
 if __name__ == "__main__":
