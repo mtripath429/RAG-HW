@@ -89,7 +89,7 @@ def get_answer(query: str):
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     
     # Get relevant docs
-    relevant_docs = retriever.get_relevant_documents(query)
+    relevant_docs = retriever.invoke(query)
     
     if not relevant_docs:
         return "No relevant documents found.", ""
